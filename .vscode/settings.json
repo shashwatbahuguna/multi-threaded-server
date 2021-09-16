@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "cmath": "c",
+        "*.tcc": "c",
+        "pthread.h": "c",
+        "sched.h": "c",
+        "stddef.h": "c",
+        "limits.h": "c"
+    }
+}

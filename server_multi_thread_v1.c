@@ -201,7 +201,7 @@ void *thread_function(int sock_fd)
         write(sock_fd, buffer, sizeof(buffer)); /* echo as confirmation */
         JsonNode *node = json_decode(buffer);
 
-        if (strcmp(json_find_member(node, "func_name")->string_, "kill") == 0)
+        if (strcmp(json_find_member(node, "dll_name")->string_, "kill") == 0)
             pthread_mutex_unlock(&wait_kill), pthread_exit(NULL);
 
         int argc = (int)json_find_member(node, "argc")->number_;
@@ -222,7 +222,7 @@ void *thread_function(int sock_fd)
         free(c);
     }
     close(sock_fd); /* break connection */
-    log_msg("SERVER: thread_function: Done. Worker thread terminating.", false);
+    log_msg("SERVER: thread_function: Done.", false);
     return NULL;
     // pthread_exit(NULL); // Thread is not closed, stays awake untill server is closed
 }

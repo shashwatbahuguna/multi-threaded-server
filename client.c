@@ -17,9 +17,10 @@ gcc client.c -o client.out -ldl -lpthread
 #include <sys/un.h>
 #include <stddef.h>
 #include <limits.h>
+#include <libexplain/connect.h>
+
 #include "modules/dll_invoker.c"
 #include "modules/queue.c"
-#include <libexplain/connect.h>
 
 #define MAXQ_SIZE 100
 
@@ -30,18 +31,17 @@ void log_msg(const char *msg, bool terminate)
         exit(-1); /* failure */
 }
 
-/*
+/**
  * Create a named (AF_LOCAL) socket at a given file path.
  * @param socket_file
- * @param is_client whether to create a client socket or server socket
  * @return Socket descriptor
  */
-
-int make_named_socket(const char *socket_file, bool is_client)
+int make_named_socket(const char *socket_file)
 {
     printf("Creating AF_LOCAL socket at path %s\n", socket_file);
 
     struct sockaddr_un name;
+
     /* Create the socket. */
     int sock_fd = socket(AF_LOCAL, SOCK_STREAM, 0);
 
@@ -60,59 +60,40 @@ int make_named_socket(const char *socket_file, bool is_client)
        size = SUN_LEN (&name);
    */
     size_t size = SUN_LEN(&name);
+
     // (offsetof(struct sockaddr_un, sun_path) +
     //    strlen(name.sun_path));
-    if (is_client)
+
+    if (connect(sock_fd, (struct sockaddr *)&name, size) < 0)
     {
-        if (connect(sock_fd, (struct sockaddr *)&name, size) < 0)
-        {
-            // printf("%d\n", connect(sock_fd, (struct sockaddr *)&name, size));
-            // fprintf(stderr, "%s\n", explain_connect(sock_fd, (struct sockaddr *)&name, size));
-            log_msg("connect failed", 1);
-        }
+        // printf("%d\n", connect(sock_fd, (struct sockaddr *)&name, size));
+        // fprintf(stderr, "%s\n", explain_connect(sock_fd, (struct sockaddr *)&name, size));
+        log_msg("connect failed", 1);
     }
 
     return sock_fd;
 }
 
 /**
- * This functions is executed in a separate thread.
- * @param sock_fd
- */
-void thread_function(void *p_sock_fd)
-{
-    int sock_fd = *((int *)p_sock_fd);
-    free(p_sock_fd);
-
-    log_msg("SERVER: thread_function: starting", false);
-    char buffer[5000];
-    memset(buffer, '\0', sizeof(buffer));
-    int count = read(sock_fd, buffer, sizeof(buffer));
-    if (count > 0)
-    {
-        printf("SERVER: Received from client: %s\n", buffer);
-        write(sock_fd, buffer, sizeof(buffer)); /* echo as confirmation */
-    }
-    close(sock_fd); /* break connection */
-    log_msg("SERVER: thread_function: Done. Worker thread terminating.", false);
-    pthread_exit(NULL); // Must be the last statement
-}
-
-/**
  * Sends a message to the server socket.
- * @param msg Message to send
+ * @param request_data Request Values, to be sent to the server.
  * @param socket_file Path of the server socket on localhost.
+ *  @param argc Count of input arguments to the function which will be executed in dll invoker
  */
 void send_message_to_socket(char **request_data, char *socket_file, int argc)
 {
-    int sockfd = make_named_socket(socket_file, true);
+    int sockfd = make_named_socket(socket_file);
 
     /* Write some stuff and read the echoes. */
     log_msg("CLIENT: Connect to server, about to write some stuff...", false);
 
-    // char *num = "4";
+    // Converts the request string to JSON Node using third party module
+    JsonNode *req_json = request_to_json(request_data[0],   // Path of Dll To be executed
+                                         request_data[1],   // Function Name
+                                         argc,              // Number of input arguments to be given to the function
+                                         request_data + 2); // Pointer to starting point of input arguments
 
-    JsonNode *req_json = request_to_json(request_data[0], request_data[1], argc - 2, request_data + 2);
+    // Encodes Node Data to string for sending to server
     char *json_string = json_encode(req_json);
 
     if (write(sockfd, json_string, strlen(json_string)) > 0)
@@ -120,11 +101,12 @@ void send_message_to_socket(char **request_data, char *socket_file, int argc)
         /* get confirmation echoed from server and print */
         char buffer[5000];
         memset(buffer, '\0', sizeof(buffer));
-
+        int byt;
         if (read(sockfd, buffer, sizeof(buffer)) > 0)
         {
             printf("CLIENT: Received from server:: %s\n", buffer);
-            read(sockfd, buffer, sizeof(buffer));
+            byt = read(sockfd, buffer, sizeof(buffer));
+            buffer[byt] = '\0';
             printf("CLIENT: Result Recieved:: %s\n", buffer);
         }
     }
@@ -134,20 +116,28 @@ void send_message_to_socket(char **request_data, char *socket_file, int argc)
 
     log_msg("CLIENT: Processing done, about to exit...", false);
     close(sockfd);
+
     /* close the connection */
 }
 
 int main(int argc, char **argv)
 {
-
-    if (argc < 4)
+    char **ptr;                               // Pointer to request data to be transmitted
+    if (argc > 2 && !strcmp(argv[2], "kill")) // kill (case sensitive) command needs no argument
+    {
+        char *arr[] = {argv[2], "0", "0"}; /* temporary, random array for successfully sending
+                                             data to server after encoding as json string*/
+        argc = 2;
+        ptr = arr;
+    }
+    else if (argc < 4) // Invalid input
     {
         printf("Usage: %s [Local socket file path] [Location of dll to be executed] [Function Name] .....[Function Arguments].....\n",
                argv[0]);
         exit(-1);
     }
-    // for (int i = 1; i < argc; i++)
-    //     argv[i][strlen(argv[i])] = '\0', printf("%s,%c| ", argv[i], argv[i][strlen(argv[i])]);
+    else // Ignore executable name, sockfile
+        ptr = argv + 2;
 
-    send_message_to_socket(argv + 2, argv[1], argc - 2);
+    send_message_to_socket(ptr, argv[1], argc - 4);
 }

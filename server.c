@@ -2,6 +2,7 @@
 gcc server.c -o serv.out -ldl -lpthread
 ./serv.out sockfile
 //############*/
+#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +10,6 @@ gcc server.c -o serv.out -ldl -lpthread
 #include <stdbool.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
@@ -17,65 +17,73 @@ gcc server.c -o serv.out -ldl -lpthread
 #include <sys/un.h>
 #include <stddef.h>
 #include <limits.h>
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <errno.h>
+
 #include "modules/dll_invoker.c"
 #include "modules/queue.c"
 #include "modules/thread_pool.c"
 
 #define MAXQ_SIZE 100
+int keep_alive = 1;
+//##################  Dispatcher (which also acts as Socket Reciever) Thread Control ##################//
 
-//##################################  Dispatcher (which also acts as Socket Reciever) Thread Control ##################################//
 threadpool *disp_pool; // Thread pool for the dispatcher
 num_queue *disp_queue; // Queue for storing incoming requests
-// pthread_t *dispatcher_pool;                              // Thread pool for the dispatcher
-// num_queue *disp_queue;                                   // Queue for storing incoming requests
-// pthread_mutex_t disp_mutex = PTHREAD_MUTEX_INITIALIZER;  // Mutex to ensure queue is worked by threads one at a time
-// pthread_cond_t disp_cond_var = PTHREAD_COND_INITIALIZER; // Conditional var to serve as signal to awake a thread
-//##################################################################################################//
 
-pthread_mutex_t wait_kill;
+//#####################################################################################################//
 
-//################################## Server Related Variables ##################################//
-threadpool *serv_pool = NULL; // Thread pool for the server to accept incoming data from client
-queue *serv_queue = NULL;     // Queue for storing incoming requests
-// pthread_t *server_pool;                                  // Thread pool for the server to accept incoming data from client
-// queue *server_queue;                                     // Queue for storing incoming requests
-// pthread_mutex_t serv_mutex = PTHREAD_MUTEX_INITIALIZER;  // Mutex to ensure queue is worked by threads one at a time
-// pthread_cond_t serv_cond_var = PTHREAD_COND_INITIALIZER; // Conditional var to serve as signal to awake a thread
-//##############################################################################################//
+pthread_mutex_t wait_kill = PTHREAD_MUTEX_INITIALIZER; //Mutex for closing all threads when kill command recieved
 
-// bool create_worker_thread(int fd);
+void *handle_conn(int sock_fd); //, pthread_mutex_t *mut);
 
-void *thread_function(int sock_fd);
+// int active_count = 0;
 
 int i = 0;
-// void *dispatcher_thread_func(void *nullptr)
-// {
-//     printf("HELLO\n");
-// }
+
 void *dispatcher_thread_func(void *nullptr) // No input arguments needed
 {
-    i++;
-    int j = 0;
     int client_fd = -1;
-    while (true)
+    while (keep_alive)
     {
-        // printf("%d, %d", i, j);
-        j++;
         pthread_mutex_lock(disp_pool->mutex);
-
-        // printf("%d, %d", i, j);
-        j++;
         client_fd = num_qpop(disp_queue);
         if (client_fd < 0)
         {
             pthread_cond_wait(disp_pool->cond_var, disp_pool->mutex);
             client_fd = num_qpop(disp_queue);
         }
-
         pthread_mutex_unlock(disp_pool->mutex);
+
         if (client_fd >= 0)
         {
-            thread_function(client_fd);
+            if (fork() == 0)
+            {
+                handle_conn(client_fd);
+                exit(0);
+            }
+            else
+            {
+                int *status = malloc(sizeof(int));
+                pid_t pid = wait(status);
+
+                int exit_status = WEXITSTATUS(*status);
+                if (exit_status == 1)
+                {
+                    pthread_mutex_unlock(&wait_kill);
+                    pthread_exit(NULL);
+                }
+                else if (WTERMSIG(*status) == SIGSEGV)
+                {
+                    char *msg = "Error! File Descriptor or Memory Limit Exceeded\n";
+                    write(client_fd, msg, strlen(msg) + 1);
+                    printf("%s", msg);
+                }
+                close(client_fd);
+            }
         }
     }
     return NULL;
@@ -163,6 +171,7 @@ void start_server_socket(char *socket_file, int max_connects)
         printf("Waiting for incoming connections...\n");
         int client_fd = accept(sock_fd, (struct sockaddr *)&caddr, &len); /* accept blocks */
 
+        // printf("Thread Cnt: %d\n", active_count);
         if (client_fd < 0)
         {
             log_msg("accept() failed. Continuing to next.", 0); /* don't terminate, though there's a problem */
@@ -171,21 +180,51 @@ void start_server_socket(char *socket_file, int max_connects)
         {
             pthread_mutex_lock(disp_pool->mutex);
             num_qpush(client_fd, disp_queue);
+
             pthread_cond_signal(disp_pool->cond_var);
             pthread_mutex_unlock(disp_pool->mutex);
         }
+        // printf("Thread Cnt: %d\n", active_count);
     }
 }
 
 /**
  * This functions is executed in a separate thread.
- * @param sock_fd
+ * @param sock_fd // Socket File Descriptor of client sending request
  * 
  *  */
-void *thread_function(int sock_fd)
+
+void *handle_conn(int sock_fd) //, pthread_mutex_t *mut)
 {
-    // int sock_fd = *((int *)p_sock_fd);
-    // free(p_sock_fd);
+    ssize_t new_lim = 5;
+    ssize_t curr_lim = getdtablesize();
+    long long i;
+
+    for (i = 3; i < curr_lim; i++)
+    {
+        errno = 0;
+        if (i != sock_fd && fcntl(i, F_GETFD) != -1 && errno != EBADF)
+            close(i);
+    }
+    if (sock_fd >= new_lim)
+    {
+        errno = 0;
+        i = fcntl(sock_fd, F_DUPFD, 2);
+        if (i == -1 || errno == EBADF)
+        {
+            printf("THIS ERR: %lld %d\n", i, sock_fd);
+            exit(0);
+        }
+        close(sock_fd);
+        sock_fd = i;
+    }
+
+    struct rlimit *num_fd_lim = malloc(sizeof(struct rlimit));
+
+    num_fd_lim->rlim_cur = new_lim;
+    num_fd_lim->rlim_max = new_lim;
+
+    setrlimit(RLIMIT_NOFILE, num_fd_lim);
 
     log_msg("SERVER: thread_function: starting", false);
 
@@ -198,12 +237,21 @@ void *thread_function(int sock_fd)
         printf("SERVER: Received from client: %s\n", buffer);
         write(sock_fd, buffer, sizeof(buffer)); /* echo as confirmation */
         JsonNode *node = json_decode(buffer);
-
-        if (strcmp(json_find_member(node, "func_name")->string_, "kill") == 0)
-            pthread_mutex_unlock(&wait_kill), pthread_exit(NULL);
+        if (!node)
+        {
+            printf("Error! Memory Limit Exceeded\n");
+        }
+        int *gen_seg;
+        *gen_seg = 1;
+        if (strcmp(json_find_member(node, "dll_name")->string_, "kill") == 0)
+        {
+            keep_alive = 0;
+            exit(1);
+        }
 
         int argc = (int)json_find_member(node, "argc")->number_;
-        char **args = (char **)malloc(sizeof(char *) * (argc));
+        char *args[argc];
+        // (char **)malloc(sizeof(char *) * (argc));
 
         JsonNode *arr = json_find_member(node, "args");
 
@@ -214,15 +262,16 @@ void *thread_function(int sock_fd)
 
         for (int i = 0; i < argc; i++)
             free(*(args + i));
-        free(args);
+        // free(args);
 
         write(sock_fd, c, sizeof(c));
         free(c);
     }
     close(sock_fd); /* break connection */
-    log_msg("SERVER: thread_function: Done. Worker thread terminating.", false);
+    log_msg("SERVER: thread_function: Done. ", false);
+
     return NULL;
-    // pthread_exit(NULL); // Thread is not closed, stays awake untill server is closed
+    // Thread is not closed, stays awake untill server is closed or kill request is given
 }
 
 void *threadKiller(void *nullptr)
@@ -230,6 +279,7 @@ void *threadKiller(void *nullptr)
     pthread_mutex_lock(&wait_kill);
     log_msg("SERVER: RECIEVED CLOSING COMMAND, CLOSING ALL THREADS", false);
     int ret;
+    // printf("%ld\n", pthread_attr_getstacksize());
     for (int i = 0; i < disp_pool->size; i++)
         if (ret = pthread_cancel((disp_pool->threads)[i]))
             printf("SERVER: ERROR CODE %d: ERROR CLOSING THREAD !!.", ret);
@@ -240,7 +290,6 @@ void *threadKiller(void *nullptr)
 
 int main(int argc, char **argv)
 {
-
     if (argc < 2)
     {
         printf("Usage: %s [Local socket file path]\n",
@@ -252,14 +301,13 @@ int main(int argc, char **argv)
     pthread_t thread_killer;
     pthread_create(&thread_killer, NULL, threadKiller, NULL);
 
-    int server_pool_cnt, dispatcher_pool_cnt;
-    server_pool_cnt = dispatcher_pool_cnt = 100;
+    int dispatcher_pool_cnt;
+    dispatcher_pool_cnt = 10;
 
     disp_queue = newNumQueue(MAXQ_SIZE);
     disp_pool = newThreadPool(dispatcher_pool_cnt);
-    beginRoutine(disp_pool, dispatcher_thread_func, NULL);
 
-    if (!disp_pool)
+    if (beginRoutine(disp_pool, dispatcher_thread_func, NULL))
         log_msg("Error !! Unable to allocate threads", true);
 
     start_server_socket(argv[1], 100);
