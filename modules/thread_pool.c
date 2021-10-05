@@ -48,7 +48,7 @@ threadpool *newThreadPool(int pool_size)
     return ptr_pool;
 }
 
-void beginRoutine(threadpool *ptr_pool, void *(*thread_func)(void *), void *args)
+int beginRoutine(threadpool *ptr_pool, void *(*thread_func)(void *), void *args)
 {
     int ret;
     for (int i = 0; i < ptr_pool->size; i++)
@@ -57,17 +57,18 @@ void beginRoutine(threadpool *ptr_pool, void *(*thread_func)(void *), void *args
         if (ret)
         {
             printf("%d: Error Code: %d\n", i, ret);
-            // return NULL;
+            return 1;
         }
     }
+    return 0;
 }
 void destroyPool(threadpool *ptr_pool)
 {
-    for (int i = 0; i < ptr_pool->size; i++)
-        pthread_cancel((ptr_pool->threads)[i]);
+    // for (int i = 0; i < ptr_pool->size; i++)
+    //     pthread_cancel((ptr_pool->threads)[i]);
 
     free(ptr_pool->threads);
-    pthread_mutex_destroy(&ptr_pool->mutex);
-    pthread_cond_destroy(&ptr_pool->cond_var);
+    pthread_mutex_destroy(ptr_pool->mutex);
+    pthread_cond_destroy(ptr_pool->cond_var);
     free(ptr_pool);
 }

@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "cmath": "c",
+        "*.tcc": "c",
+        "pthread.h": "c",
+        "sched.h": "c",
+        "stddef.h": "c",
+        "limits.h": "c",
+        "json.h": "c",
+        "inet.h": "c",
+        "connect.h": "c",
+        "signal.h": "c"
+    }
+}
