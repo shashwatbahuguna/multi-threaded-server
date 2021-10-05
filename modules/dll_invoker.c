@@ -1,66 +1,123 @@
-// #include <stdio.h>
-// #include <stdlib.h>
 #include <dlfcn.h>
 #include <stdlib.h>
 
-// gcc -ldl flag is to be enabled
-
-char *exec_dll(char *dll_name, char *func_name, char **args)
+char *exec_dll(char *dll_name, char *func_name, char **args, int argc, int *errcode)
 {
-    if (strcmp(func_name, "sleep") == 0)
+    printf("%s, %s, %s,\n", dll_name, func_name, args[0]);
+    *errcode = 0;
+    if (access(dll_name, F_OK))
     {
-        void *fhandle;
-        unsigned int (*func)(unsigned int);
-        fhandle = dlopen(dll_name, RTLD_LAZY);
-        func = dlsym(fhandle, func_name);
-        char *end;
-        unsigned int time_sleep = strtoul(args[0], &end, 10);
-        (*func)(time_sleep);
-        char *mess = (char *)malloc(21 * sizeof(char));
-        snprintf(mess, 21, "Succesfully Executed");
-        return mess;
-    }
-    void *fhandle;
-    double (*func)(double);
-
-    if (!(fhandle = dlopen(dll_name, RTLD_LAZY)))
-    {
-        char *inv = malloc(70);
-        snprintf(inv, 70, "%s", "Error: Invalid File Descriptor FHANDLE\n");
-        printf("%s", inv);
-        return inv;
+        *errcode = 1;
+        return NULL;
     }
 
-    func = dlsym(fhandle, func_name);
-    char *term;
+    void *fhandle = dlopen(dll_name, RTLD_NOW);
 
-    double v = strtod(args[0], &term);
-
-    if (func == NULL)
+    if (fhandle == NULL)
     {
-        // printf("%s", "\nNULL\n");
-        char *inv = malloc(70);
-        snprintf(inv, 70, "%s", "Error: Invalid File Descriptor. \nOpen File descriptor limit reached.\n");
-        printf("%s", inv);
-        return inv;
+        *errcode = -1;
+        return NULL;
     }
 
-    double res = (*func)(v);
+    void *func_ptr = dlsym(fhandle, func_name);
 
-    printf("%lf\n", res);
-    dlclose(fhandle);
+    if (func_ptr == NULL)
+    {
+        *errcode = 2;
+        return NULL;
+    }
+    bool valid = true;
+    if (strcmp(func_name, "sqrt") == 0 || strcmp(func_name, "floor") == 0 || strcmp(func_name, "ceil") == 0 || strcmp(func_name, "cos") == 0 || strcmp(func_name, "sin") == 0 || strcmp(func_name, "sinh") == 0 || strcmp(func_name, "cosh") == 0)
+    {
+        if (argc != 1)
+            valid = false;
+        else
+        {
+            double (*func)(double);
+            func = func_ptr;
 
-    ssize_t sz = snprintf(NULL, 0, "%lf", res);
+            char *term;
 
-    char *buff = malloc(sz);
-    snprintf(buff, sz - 1, "%lf", res);
+            double v = strtod(args[0], &term);
+            if (term == args[0])
+                valid = false;
+            else
+            {
+                double res = (*func)(v);
 
-    return buff;
+                printf("%lf\n", res);
+                dlclose(fhandle);
+
+                ssize_t sz = snprintf(NULL, 0, "%lf", res);
+
+                char *buff = malloc(sz);
+                snprintf(buff, sz - 1, "%lf", res);
+
+                return buff;
+            }
+        }
+    }
+    else if (strcmp(func_name, "sleep") == 0)
+    {
+        if (argc != 1)
+            valid = false;
+        else
+        {
+            unsigned int (*func)(unsigned int) = func_ptr;
+
+            char *end;
+            unsigned long time_sleep = strtoul(args[0], &end, 10);
+            if (end == args[0])
+                valid = false;
+            else
+            {
+                (*func)(time_sleep);
+                char *mess = (char *)malloc(21 * sizeof(char));
+                snprintf(mess, 21, "Succesfully Executed");
+
+                return mess;
+            }
+        }
+    }
+    else if (strcmp(func_name, "pow") == 0 || strcmp(func_name, "fmod") == 0)
+    {
+        if (argc != 2)
+            valid = false;
+        else
+        {
+            double (*func)(double, double);
+            func = func_ptr;
+
+            // printf("Dunc%s\n%d\n", func_name, (int)(func_ptr != NULL));
+            // printf("Args: %s, %s\n", args[0], args[1]);
+
+            char *term_a, *term_b;
+
+            double v_a = strtod(args[0], &term_a), v_b = strtod(args[1], &term_b);
+
+            if (term_b == args[0] || term_b == args[1])
+                valid = false;
+            else
+            {
+                double res = (*func)(v_a, v_b);
+
+                printf("%lf\n", res);
+                dlclose(fhandle);
+
+                ssize_t sz = snprintf(NULL, 0, "%lf", res);
+
+                char *buff = malloc(sz);
+                snprintf(buff, sz - 1, "%lf", res);
+
+                return buff;
+            }
+        }
+    }
+    else
+        *errcode = 4;
+
+    if (!valid)
+        *errcode = 3;
+
+    return NULL;
 }
-
-// int main(int argc, char **argv)
-// {
-//     char *c = "100000.0";
-//     char **arg = &c;
-//     exec_dll("/lib/x86_64-linux-gnu/libm.so.6", "sqrt", arg);
-// }

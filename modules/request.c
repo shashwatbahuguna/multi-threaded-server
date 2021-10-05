@@ -1,5 +1,3 @@
-#include "json_module/json.h" //Copyright (C) 2011 Joseph A. Adams (joeyadams3.14159@gmail.com)
-#include "json_module/json.c" //Copyright (C) 2011 Joseph A. Adams (joeyadams3.14159@gmail.com)
 typedef struct request request;
 
 struct request
@@ -19,11 +17,16 @@ void copyString(char **dest, char *src)
     (*dest)[sz - 1] = '\0';
 }
 
-JsonNode *request_to_json(char *dll_name, char *func_name, int argc, char **argv)
+JsonNode *request_to_json(char *dll_name, char *func_name, int argc, char **argv, int *err)
 {
     JsonNode *json = json_mkobject();
     char *dll_name_cop, *func_name_cop, *temp_cop;
-
+    if (!dll_name || !func_name || !argv)
+    {
+        *err = 1;
+        printf("Error! Invalid Request Data Recieved\n");
+        return NULL;
+    }
     copyString(&dll_name_cop, dll_name);
     copyString(&func_name_cop, func_name);
 
@@ -35,6 +38,12 @@ JsonNode *request_to_json(char *dll_name, char *func_name, int argc, char **argv
 
     for (int i = 0; i < argc; i++)
     {
+        if (!argv[i])
+        {
+            *err = 1;
+            printf("Error! Invalid Request Data Recieved (Arguments)\n");
+            return NULL;
+        }
         copyString(&temp_cop, argv[i]);
         json_append_element(arguments, mkstring(temp_cop));
     }
