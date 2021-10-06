@@ -60,7 +60,7 @@ Execution
 
 ( 
   Sleep for 2 sec command is given by 100 clients simultaneuosly to server with 20 threads
-  Concurrency is Evident Since tasks are completed in 4 sets of 5, taking a total of 10 secs.
+  Concurrency is Evident Since tasks are completed in 5 sets of 20 clients, taking a total of 10 secs.
   (Would have been 200 seconds in single threaded handling.)
 )
 
